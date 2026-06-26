@@ -1,0 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=Raleway:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Raleway', sans-serif;
+    background-color: #f1f2f2;
+    color: #00313a;
+  }
+}
+
+@layer components {
+  .card     { @apply bg-white rounded-2xl shadow-card p-6; }
+  .stat-card{ @apply bg-white rounded-2xl shadow-card p-5 border border-sky/40 hover:shadow-glow transition-all duration-200; }
+}
+
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: #f1f2f2; }
+::-webkit-scrollbar-thumb  { background: #75b5b4; border-radius: 3px; }
+
+@keyframes scroll-left {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.scroll-animate {
+  animation: scroll-left 40s linear infinite;
+  display: inline-block;
+  white-space: nowrap;
+}
+.scroll-animate:hover { animation-play-state: paused; }
