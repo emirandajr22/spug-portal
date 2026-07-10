@@ -92,7 +92,9 @@ export default function LoginPage() {
       return;
     }
 
+    localStorage.removeItem("sso_return_url");
     navigate("/", { replace: true });
+
     setLoading(false);
   };
 
@@ -127,9 +129,7 @@ export default function LoginPage() {
           onSubmit={handleLogin}
           className="w-full max-w-md bg-white/90 backdrop-blur-md rounded-2xl shadow-2xl p-8"
         >
-          <h2 className="text-2xl font-semibold text-moss mb-2">
-            Welcome
-          </h2>
+          <h2 className="text-2xl font-semibold text-moss mb-2">Welcome</h2>
           <p className="text-gray-500 mb-6">Sign in to your account</p>
 
           {error && (
