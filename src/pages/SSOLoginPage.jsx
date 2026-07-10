@@ -146,16 +146,16 @@ export default function SSOLogin() {
       console.log("STEP 5");
 
       // Save where the user came from
-      localStorage.setItem(
-        "sso_return_url",
-        "http://localhost:5173/", // <-- your VEC Portal URL for development
-      );
+    //   localStorage.setItem(
+    //     "sso_return_url",
+    //     "http://localhost:5173/", // <-- your VEC Portal URL for development
+    //   );
 
       // For production later:
-      // localStorage.setItem(
-      //   "sso_return_url",
-      //   "https://portal.vec-powerconnect.com/login", // <-- your VEC Portal URL for production
-      // );
+      localStorage.setItem(
+        "sso_return_url",
+        "https://portal.vec-powerconnect.com/login", // <-- your VEC Portal URL for production
+      );
 
       console.log("Saved!");
       console.log(localStorage.getItem("sso_return_url"));
