@@ -2,6 +2,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useState, useRef, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import DashboardLayout from "../components/DashboardLayout";
+import * as XLSX from "xlsx";
 
 /* ─── Table configs — CSV column → DB column mapping ─────────────── */
 const TABLE_CONFIGS = {
@@ -24,15 +25,21 @@ const TABLE_CONFIGS = {
   },
   dpi_data: {
     label: "DPI — Delta P, Inc.",
+    textColumns: ["billing_period"],
     columnMap: {
-      "MONTH":                "month",
-      "TCGR (P/kWh) ":       "tcgr",
-      "Energy Offtake (kWh)": "energy_offtake",
-      "Contracted  Energy":   "contracted_energy",
-      "Capacity Fee":         "capacity_fee",
-      "Variable O&M Fee":     "variable_om_fee",
-      "Fuel Fee":             "fuel_fee",
-      "PALECO Bill":          "paleco_bill",
+      "MONTH":                      "month",
+      "Energy Offtake (kWh)":       "energy_offtake",
+      "Capacity Fee kW":            "capacity_kw",
+      "Fuel Fee":                   "fuel_fee",
+      "Fixed O&M Fee":              "fixed_om_fee",
+      "Variable O&M Fee":           "variable_om_fee",
+      "Capital Recovery Fee":       "capital_recovery_fee",
+      "Total Generation Cost":      "total_generation_cost",
+      "Total Generation Rate":      "tcgr",
+      "PPD":                        "ppd",
+      "PALECO Bill (Net of PPD)":   "paleco_bill",
+      "NPC BILL":                   "npc_bill",
+      "Billing Period":             "billing_period",
     },
   },
   cipc_epsa_data: {
@@ -112,7 +119,17 @@ function parseCSV(text) {
   });
 }
 
-function mapRow(row, columnMap, sortOrder) {
+function parseExcel(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: true });
+  // Drop fully-blank trailing rows (e.g. empty row at end of sheet)
+  return rows.filter((r) => Object.values(r).some((v) => v !== "" && v != null));
+}
+
+const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function mapRow(row, columnMap, sortOrder, textColumns = []) {
   const normalizedRow = Object.fromEntries(
     Object.entries(row).map(([k, v]) => [k.trim(), v])
   );
@@ -125,14 +142,21 @@ function mapRow(row, columnMap, sortOrder) {
       ? normalizedRow[trimmedKey]
       : normalizedRow[csvCol];
     if (dbCol === "month") {
-      // Normalize month format: "Jan-25" → "Jan 2025", "Jan 2025" stays as-is
-      const raw = val || null;
-      if (raw && /^[A-Za-z]+-\d{2}$/.test(raw.trim())) {
-        const [mon, yr] = raw.trim().split("-");
-        mapped[dbCol] = `${mon} 20${yr}`;
+      // Excel date cell (e.g. DPI's MONTH column) → "Oct 2025"
+      if (val instanceof Date && !isNaN(val)) {
+        mapped[dbCol] = `${MONTH_ABBR[val.getMonth()]} ${val.getFullYear()}`;
       } else {
-        mapped[dbCol] = raw;
+        // Normalize text format: "Jan-25" → "Jan 2025", "Jan 2025" stays as-is
+        const raw = val || null;
+        if (raw && /^[A-Za-z]+-\d{2}$/.test(String(raw).trim())) {
+          const [mon, yr] = String(raw).trim().split("-");
+          mapped[dbCol] = `${mon} 20${yr}`;
+        } else {
+          mapped[dbCol] = raw;
+        }
       }
+    } else if (textColumns.includes(dbCol)) {
+      mapped[dbCol] = val || null;
     } else {
       mapped[dbCol] = parseNum(val);
     }
@@ -199,9 +223,20 @@ export default function UploadPage() {
     reader.onload = (ev) => {
       try {
         const config = TABLE_CONFIGS[selectedTable];
-        const parsed = parseCSV(ev.target.result);
+        const buffer = ev.target.result;
 
-        // ── Validate CSV headers against expected columnMap keys ──
+        // ── Detect real file type from content, not the filename extension ──
+        // .xlsx/.xls files are ZIP archives starting with the "PK" signature.
+        // Some source files get saved with the wrong extension (e.g. an actual
+        // Excel file renamed to .csv), so we sniff the bytes instead of trusting the name.
+        const head = new Uint8Array(buffer.slice(0, 4));
+        const isExcel = head[0] === 0x50 && head[1] === 0x4b; // "PK"
+
+        const parsed = isExcel
+          ? parseExcel(buffer)
+          : parseCSV(new TextDecoder("utf-8").decode(buffer));
+
+        // ── Validate headers against expected columnMap keys ──
         const csvHeaders    = Object.keys(parsed[0] || {}).map((h) => h.trim());
         const expectedKeys  = Object.keys(config.columnMap).map((k) => k.trim());
         const missingCols   = expectedKeys.filter((k) => !csvHeaders.includes(k));
@@ -210,7 +245,7 @@ export default function UploadPage() {
         // Fail if more than half the expected columns are missing — likely wrong file
         if (missingCols.length > expectedKeys.length / 2) {
           setErrorMsg(
-            `Wrong CSV file for "${config.label}".\n` +
+            `Wrong file for "${config.label}".\n` +
             `Missing columns: ${missingCols.join(", ")}.\n` +
             `Make sure you selected the correct table for this file.`
           );
@@ -221,19 +256,19 @@ export default function UploadPage() {
         }
 
         // Warn but still allow if only a few columns are missing
-        const mapped = parsed.map((row, i) => mapRow(row, config.columnMap, i + 1));
+        const mapped = parsed.map((row, i) => mapRow(row, config.columnMap, i + 1, config.textColumns));
         setRows(mapped);
         setStatus("preview");
 
         if (missingCols.length > 0) {
-          setErrorMsg(`Note: ${missingCols.length} expected column(s) not found in CSV and will be empty: ${missingCols.join(", ")}`);
+          setErrorMsg(`Note: ${missingCols.length} expected column(s) not found in file and will be empty: ${missingCols.join(", ")}`);
         }
       } catch (err) {
-        setErrorMsg("Failed to parse CSV: " + err.message);
+        setErrorMsg("Failed to parse file: " + err.message);
         setStatus("error");
       }
     };
-    reader.readAsText(file);
+    reader.readAsArrayBuffer(file);
   }, [selectedTable]);
 
   const handleUpload = useCallback(async () => {
@@ -307,7 +342,7 @@ export default function UploadPage() {
         {/* ── Step 2: Upload file ── */}
         {selectedTable && (
           <div className="card">
-            <h3 className="font-semibold text-dark text-sm mb-4">2 — Upload CSV file</h3>
+            <h3 className="font-semibold text-dark text-sm mb-4">2 — Upload file</h3>
             <label
               className={`flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-10 cursor-pointer transition-colors
                 ${status === "preview" || status === "success"
@@ -319,13 +354,13 @@ export default function UploadPage() {
               </svg>
               {fileName
                 ? <p className="text-sm font-medium text-dark">{fileName}</p>
-                : <p className="text-sm text-dark/40">Click to choose a CSV file</p>
+                : <p className="text-sm text-dark/40">Click to choose a CSV or Excel file</p>
               }
-              <p className="text-xs text-dark/30 mt-1">.csv files only</p>
+              <p className="text-xs text-dark/30 mt-1">.csv, .xlsx, or .xls — file type is auto-detected</p>
               <input
                 ref={fileRef}
                 type="file"
-                accept=".csv"
+                accept=".csv,.xlsx,.xls,*/*"
                 onChange={handleFile}
                 className="hidden"
               />

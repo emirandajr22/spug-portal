@@ -47,6 +47,9 @@ export default function LoginPage() {
     }
 
     if (!profile) {
+      // Account already exists in Supabase Auth (auth.users), so it was
+      // already provisioned/approved there — no need for a second
+      // "pending" approval step inside the webapp.
       const { error: insertError } = await supabase
         .schema("spug")
         .from("users")
@@ -55,7 +58,7 @@ export default function LoginPage() {
           email: user.email,
           full_name: user.user_metadata?.full_name || "",
           role: "user",
-          status: "pending",
+          status: "active",
         });
 
       if (insertError) {

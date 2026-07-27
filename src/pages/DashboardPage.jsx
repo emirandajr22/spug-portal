@@ -3,6 +3,7 @@ import { useDashboardData } from "../hooks/useDashboardData";
 import { useDpiData } from "../hooks/useDpiData";
 import DashboardLayout from "../components/DashboardLayout";
 import StatCard from "../components/StatCard";
+import { exportTableCSV, exportTableExcel, exportTablePDF } from "../lib/tableExport";
 import {
   BarChart, Bar, AreaChart, Area, ComposedChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -31,27 +32,6 @@ const toNum = (v) => {
 };
 const sum = (arr) => arr.filter((v) => v != null && !isNaN(v)).reduce((a, b) => a + b, 0);
 const avg = (arr) => { const v = arr.filter((v) => v != null && !isNaN(v)); return v.length ? sum(v) / v.length : 0; };
-
-const fDate = (d) => {
-  if (!d) return "ongoing";
-  const dt = new Date(d);
-  return dt.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
-};
-
-function getContractsForMonth(month, contracts) {
-  const monthMap = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 };
-  const [monthStr, yearStr] = month.split(" ");
-  const year = parseInt(yearStr);
-  const monthIdx = monthMap[monthStr];
-  if (monthIdx === undefined || isNaN(year)) return [];
-  const periodStart = new Date(year, monthIdx - 1, 25);
-  const periodEnd   = new Date(year, monthIdx, 25);
-  return contracts.filter((c) => {
-    const eff = new Date(c.effective_date);
-    const end = c.end_date ? new Date(c.end_date) : new Date("9999-12-31");
-    return eff < periodEnd && end >= periodStart;
-  });
-}
 
 const CONFIG = {
   dpi:          { title: "Delta P, Inc.",                   subtitle: "DPI Energy Dashboard",  table: "dpi_data"          },
@@ -150,23 +130,113 @@ function ChartCard({ title, children, filename = "chart" }) {
 }
 
 /* ================================================================ */
-/*  DPI Dashboard                                                    */
+/*  Table export buttons (CSV / Excel / PDF)                        */
 /* ================================================================ */
-function DpiDashboard({ data, contracts }) {
-  const [expandedRows, setExpandedRows] = useState(new Set());
+function ExportButtons({ columns, rows, filename, title }) {
+  if (!rows.length) return null;
+  const btnClass = "flex items-center gap-1 text-dark/40 hover:text-primary hover:bg-sky/30 transition-colors rounded-lg px-2 py-1 text-xs";
+  return (
+    <div className="flex items-center gap-1 shrink-0">
+      <button onClick={() => exportTableCSV(columns, rows, filename)} className={btnClass} title="Export as CSV">
+        <DownloadIcon/><span>CSV</span>
+      </button>
+      <button onClick={() => exportTableExcel(columns, rows, filename, title)} className={btnClass} title="Export as Excel">
+        <DownloadIcon/><span>Excel</span>
+      </button>
+      <button onClick={() => exportTablePDF(columns, rows, filename, title)} className={btnClass} title="Export as PDF">
+        <DownloadIcon/><span>PDF</span>
+      </button>
+    </div>
+  );
+}
 
-  const toggleRow = (month) => {
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      next.has(month) ? next.delete(month) : next.add(month);
-      return next;
-    });
-  };
+function TableCardHeader({ title, subtitle, columns, rows, filename }) {
+  return (
+    <div className="flex items-start justify-between mb-1 gap-3">
+      <div>
+        <h3 className="font-semibold text-dark text-sm">{title}</h3>
+        {subtitle && <p className="text-dark/40 text-[11px] mt-0.5">{subtitle}</p>}
+      </div>
+      <ExportButtons columns={columns} rows={rows} filename={filename} title={title}/>
+    </div>
+  );
+}
 
-  const tcgr  = data.map((r) => toNum(r.tcgr)).filter(Boolean);
+const DPI_LEGACY_COLUMNS = [
+  { header: "Month", key: "month", type: "text" },
+  { header: "TCGR (₱/kWh)", key: "tcgr", type: "rate4" },
+  { header: "Energy Offtake (kWh)", key: "energy_offtake", type: "kwh" },
+  { header: "Capacity Fee (₱)", key: "capacity_fee", type: "money" },
+  { header: "Variable O&M Fee (₱)", key: "variable_om_fee", type: "money" },
+  { header: "Fuel Fee (₱)", key: "fuel_fee", type: "money" },
+  { header: "PALECO Bill (₱)", key: "paleco_bill", type: "money" },
+];
+
+const DPI_CURRENT_COLUMNS = [
+  { header: "Month", key: "month", type: "text" },
+  { header: "Billing Period", key: "billing_period", type: "text" },
+  { header: "TCGR (₱/kWh)", key: "tcgr", type: "rate4" },
+  { header: "Energy Offtake (kWh)", key: "energy_offtake", type: "kwh" },
+  { header: "Capacity (kW)", key: "capacity_kw", type: "kw" },
+  { header: "Capital Recovery Fee (₱)", key: "capital_recovery_fee", type: "money" },
+  { header: "Fixed O&M (₱)", key: "fixed_om_fee", type: "money" },
+  { header: "Variable O&M Fee (₱)", key: "variable_om_fee", type: "money" },
+  { header: "Fuel Fee (₱)", key: "fuel_fee", type: "money" },
+  { header: "PALECO Bill (₱)", key: "paleco_bill", type: "money" },
+  { header: "NPC Bill (₱)", key: "npc_bill", type: "money" },
+  { header: "PPD (₱)", key: "ppd", type: "money" },
+];
+
+const INPC_COLUMNS = [
+  { header: "Month", key: "month", type: "text" },
+  { header: "TCGR (₱/kWh)", key: "tcgr", type: "rate4" },
+  { header: "SAGR (₱/kWh)", key: "sagr", type: "rate4" },
+  { header: "Energy Offtake (kWh)", key: "energy_offtake", type: "kwh" },
+  { header: "Capital Recovery Fee (₱)", key: "capital_recovery_fee", type: "money" },
+  { header: "Fixed O&M (₱)", key: "fixed_om", type: "money" },
+  { header: "Variable O&M Fee (₱)", key: "variable_om_fee", type: "money" },
+  { header: "Fuel Fee (₱)", key: "fuel_fee", type: "money" },
+  { header: "Total Fee (₱)", key: "total_fee", type: "money" },
+  { header: "BANELCO Bill (₱)", key: "banelco_bill", type: "money" },
+  { header: "NPC Bill (₱)", key: "npc_bill", type: "money" },
+  { header: "PPD (₱)", key: "ppd", type: "money" },
+];
+
+const CIPC_FULL_COLUMNS = [
+  { header: "Month", key: "month", type: "text" },
+  { header: "TCGR (₱/kWh)", key: "tcgr", type: "rate4" },
+  { header: "SAGR", key: "sagr", type: "rate4" },
+  { header: "Energy Offtake (kWh)", key: "energy_offtake", type: "kwh" },
+  { header: "Capacity Fee (₱)", key: "capacity_fee", type: "money" },
+  { header: "Fixed Foreign O&M Fee (₱)", key: "fixed_foreign_om_fee", type: "money" },
+  { header: "Variable Foreign O&M Fee (₱)", key: "variable_foreign_om_fee", type: "money" },
+  { header: "Fixed Local O&M Fee (₱)", key: "fixed_local_om_fee", type: "money" },
+  { header: "Variable Local O&M Fee (₱)", key: "variable_local_om_fee", type: "money" },
+  { header: "Fuel & Lube Oil Fee (₱)", key: "fuel_and_lube_oil_fee", type: "money" },
+  { header: "Total Fee (₱)", key: "total_fee", type: "money" },
+  { header: "BISELCO Bill (₱)", key: "biselco_bill", type: "money" },
+  { header: "NPC Bill (₱)", key: "npc_bill", type: "money" },
+  { header: "PPD (₱)", key: "ppd", type: "money" },
+];
+
+const CIPC_EPSA_COLUMNS = [
+  { header: "Month", key: "month", type: "text" },
+  { header: "TCGR (₱/kWh)", key: "tcgr", type: "rate4" },
+  { header: "SAGR", key: "sagr", type: "rate4" },
+  { header: "Energy Offtake (kWh)", key: "energy_offtake", type: "kwh" },
+  { header: "Capacity & Fixed O&M Fee (₱)", key: "capacity_and_fixed_om_fee", type: "money" },
+  { header: "Variable O&M Fee (₱)", key: "variable_om_fee", type: "money" },
+  { header: "Fuel Fee (₱)", key: "fuel_fee", type: "money" },
+  { header: "Total Fee (₱)", key: "total_fee", type: "money" },
+];
+
+
+function DpiDashboard({ data }) {
+  const tcgr   = data.map((r) => toNum(r.tcgr)).filter(Boolean);
   const energy = data.map((r) => toNum(r.energy_offtake)).filter(Boolean);
   const paleco = data.map((r) => toNum(r.paleco_bill)).filter(Boolean);
-  const fuel   = data.map((r) => toNum(r.fuel_fee)).filter(Boolean);
+  const npc    = data.map((r) => toNum(r.npc_bill)).filter(Boolean);
+  const total  = data.map((r) => toNum(r.total_generation_cost)).filter(Boolean);
 
   return (
     <>
@@ -174,7 +244,7 @@ function DpiDashboard({ data, contracts }) {
         <StatCard title="Avg True Cost Gen Rate" value={`₱${avg(tcgr).toFixed(4)}`} suffix="/kWh" sparklineData={tcgr}/>
         <StatCard title="Total Energy Offtake" value={shortKwh(sum(energy))} suffix=" kWh" sparklineData={energy}/>
         <StatCard title="Total Billed to PALECO" value={shortM(sum(paleco))} sparklineData={paleco}/>
-        <StatCard title="Total Fuel Fee" value={shortM(sum(fuel))} sparklineData={fuel}/>
+        <StatCard title="Total Billed to NPC" value={shortM(sum(npc))} sparklineData={npc}/>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <ChartCard title="True Cost Generation Rate (₱/kWh)" filename="dpi-tcgr">
@@ -188,18 +258,16 @@ function DpiDashboard({ data, contracts }) {
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
-        <ChartCard title="Energy Offtake vs Contracted Energy (kWh)" filename="dpi-energy-offtake">
+        <ChartCard title="Energy Offtake (kWh)" filename="dpi-energy-offtake">
           <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart data={data} margin={{ top:4, right:8, bottom:4, left:0 }}>
+            <AreaChart data={data} margin={{ top:4, right:8, bottom:4, left:0 }}>
               <defs>{G("dE","#005697",0.3)}</defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#d4eef5"/>
               <XAxis dataKey="month" tick={{ fontSize:10, fill:"#00313a" }}/>
               <YAxis tick={{ fontSize:10, fill:"#00313a" }} tickFormatter={shortKwh}/>
               <Tooltip content={<ChartTooltip/>}/>
-              <Legend wrapperStyle={{ fontSize:10 }}/>
               <Area type="monotone" dataKey="energy_offtake" name="Energy Offtake" fill="url(#dE)" stroke="#005697" strokeWidth={2}/>
-              <Line type="monotone" dataKey="contracted_energy" name="Contracted Energy" stroke="#a24f4f" strokeWidth={2} strokeDasharray="5 5" dot={false}/>
-            </ComposedChart>
+            </AreaChart>
           </ResponsiveContainer>
         </ChartCard>
       </div>
@@ -207,118 +275,130 @@ function DpiDashboard({ data, contracts }) {
         <ChartCard title="Cost Breakdown (₱)" filename="dpi-cost-breakdown">
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={data} margin={{ top:4, right:8, bottom:4, left:0 }}>
-              <defs>{G("dC","#75b5b4")}{G("dV","#9bbfde")}{G("dF","#a24f4f")}</defs>
+              <defs>{G("dCap","#4a3f7a")}{G("dR","#75b5b4")}{G("dO","#9bbfde")}{G("dV","#f0a85c")}{G("dF","#a24f4f")}</defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#d4eef5"/>
               <XAxis dataKey="month" tick={{ fontSize:10, fill:"#00313a" }}/>
               <YAxis tick={{ fontSize:10, fill:"#00313a" }} tickFormatter={shortM}/>
               <Tooltip content={<ChartTooltip/>}/>
               <Legend wrapperStyle={{ fontSize:10 }}/>
-              <Area type="monotone" dataKey="capacity_fee" name="Capacity Fee" stroke="#75b5b4" fill="url(#dC)" strokeWidth={1.5}/>
-              <Area type="monotone" dataKey="variable_om_fee" name="Variable O&M" stroke="#9bbfde" fill="url(#dV)" strokeWidth={1.5}/>
+              <Area type="monotone" dataKey="capacity_fee" name="Capacity Fee (pre-2026)" stroke="#4a3f7a" fill="url(#dCap)" strokeWidth={1.5}/>
+              <Area type="monotone" dataKey="capital_recovery_fee" name="Capital Recovery Fee" stroke="#75b5b4" fill="url(#dR)" strokeWidth={1.5}/>
+              <Area type="monotone" dataKey="fixed_om_fee" name="Fixed O&M" stroke="#9bbfde" fill="url(#dO)" strokeWidth={1.5}/>
+              <Area type="monotone" dataKey="variable_om_fee" name="Variable O&M" stroke="#f0a85c" fill="url(#dV)" strokeWidth={1.5}/>
               <Area type="monotone" dataKey="fuel_fee" name="Fuel Fee" stroke="#a24f4f" fill="url(#dF)" strokeWidth={1.5}/>
             </AreaChart>
           </ResponsiveContainer>
         </ChartCard>
-        <ChartCard title="PALECO Bill Trend (₱)" filename="dpi-paleco-trend">
+        <ChartCard title="Bill Split — PALECO vs NPC Bill (₱)" filename="dpi-bill-split">
           <ResponsiveContainer width="100%" height={220}>
-            <ComposedChart data={data} margin={{ top:4, right:40, bottom:4, left:0 }}>
-              <defs>{G("dP","#00313a",0.15)}</defs>
+            <ComposedChart data={data} margin={{ top:4, right:8, bottom:4, left:0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#d4eef5"/>
               <XAxis dataKey="month" tick={{ fontSize:10, fill:"#00313a" }}/>
-              <YAxis yAxisId="l" tick={{ fontSize:10, fill:"#00313a" }} tickFormatter={shortM}/>
-              <YAxis yAxisId="r" orientation="right" tick={{ fontSize:10, fill:"#75b5b4" }} domain={["auto","auto"]} tickFormatter={(v) => `₱${v}`}/>
+              <YAxis tick={{ fontSize:10, fill:"#00313a" }} tickFormatter={shortM}/>
               <Tooltip content={<ChartTooltip/>}/>
               <Legend wrapperStyle={{ fontSize:10 }}/>
-              <Area yAxisId="l" type="monotone" dataKey="paleco_bill" name="PALECO Bill" stroke="#00313a" fill="url(#dP)" strokeWidth={2}/>
-              <Line yAxisId="r" type="monotone" dataKey="tcgr" name="TCGR (₱/kWh)" stroke="#75b5b4" strokeWidth={2} dot={{ r:3, fill:"#75b5b4" }}/>
+              <Bar dataKey="paleco_bill" name="PALECO Bill" stackId="a" fill="#00313a"/>
+              <Bar dataKey="npc_bill" name="NPC Bill" stackId="a" fill="#f0a85c" radius={[4,4,0,0]}/>
+              <Line dataKey="total_generation_cost" name="Total Generation Cost" stroke="#75b5b4" strokeWidth={2} dot={{ r:3 }}/>
             </ComposedChart>
           </ResponsiveContainer>
         </ChartCard>
       </div>
 
-      {/* ── Monthly Data Table with expandable contract rows ── */}
-      <div className="card">
-        <h3 className="font-semibold text-dark text-sm mb-4">Monthly Data Table</h3>
-        <div className="overflow-x-auto rounded-lg border border-sky/30">
-          <table className="w-full text-xs" style={{ minWidth:"900px" }}>
-            <thead>
-              <tr className="bg-sky/30 border-b border-sky/40">
-                {["Month","TCGR (₱/kWh)","Energy Offtake","Contracted Energy","Capacity Fee","Variable O&M Fee","Fuel Fee","PALECO Bill"].map((h) => (
-                  <th key={h} className="text-left py-2.5 px-3 text-dark/70 font-semibold whitespace-nowrap">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((r, i) => {
-                const monthContracts = getContractsForMonth(r.month, contracts);
-                const hasMultiple    = monthContracts.length > 1;
-                const isExpanded     = expandedRows.has(r.month);
-                const rowBg          = i % 2 === 0 ? "bg-white" : "bg-sky/5";
-                return (
-                  <>
-                    <tr
-                      key={r.month}
-                      onClick={() => hasMultiple && toggleRow(r.month)}
-                      className={`border-b border-sky/20 transition-colors ${rowBg} ${hasMultiple ? "cursor-pointer hover:bg-amber-50" : "hover:bg-sky/10"}`}
-                    >
-                      <td className="py-2.5 px-3 font-semibold text-dark whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          {r.month}
-                          {hasMultiple && (
-                            <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">
-                              {monthContracts.length} contracts
-                            </span>
-                          )}
-                          {hasMultiple && (
-                            <svg className={`w-3.5 h-3.5 text-dark/30 transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                              fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/>
-                            </svg>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 font-mono text-primary whitespace-nowrap">₱{(toNum(r.tcgr) || 0).toFixed(4)}</td>
-                      <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fKWh(r.energy_offtake)}</td>
-                      <td className="py-2.5 px-3 font-mono whitespace-nowrap">
-                        {hasMultiple
-                          ? <span className="text-dark/40 italic">see below ↓</span>
-                          : r.contracted_energy ? fKWh(r.contracted_energy) : "—"
-                        }
-                      </td>
-                      <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fPHP(r.capacity_fee)}</td>
-                      <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fPHP(r.variable_om_fee)}</td>
-                      <td className="py-2.5 px-3 font-mono text-accentRed whitespace-nowrap">{fPHP(r.fuel_fee)}</td>
-                      <td className="py-2.5 px-3 font-mono font-bold text-dark whitespace-nowrap">{fPHP(r.paleco_bill)}</td>
-                    </tr>
-                    {hasMultiple && isExpanded && monthContracts.map((c, ci) => (
-                      <tr key={`${r.month}-c${ci}`} className="border-b border-amber-100 bg-amber-50/60">
-                        <td className="py-2 px-3 whitespace-nowrap" colSpan={1}>
-                          <div className="flex items-center gap-1.5 pl-4">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"/>
-                            <span className="font-medium text-dark/60 text-xs">{c.label || `Period ${ci + 1}`}</span>
-                          </div>
-                          <div className="text-dark/30 text-xs mt-0.5 pl-7">
-                            {fDate(c.effective_date)} – {fDate(c.end_date)}
-                          </div>
-                        </td>
-                        <td className="py-2 px-3 text-dark/20 text-xs">—</td>
-                        <td className="py-2 px-3 text-dark/20 text-xs">—</td>
-                        <td className="py-2 px-3 font-mono text-amber-700 whitespace-nowrap text-xs">{fKWh(c.contracted_energy)}</td>
-                        <td className="py-2 px-3 text-dark/20 text-xs" colSpan={4}>—</td>
+      {/* ── Monthly Data Tables (split by billing model) ── */}
+      {(() => {
+        const legacyRows = data.filter((r) => r.capacity_kw == null);
+        const currentRows = data.filter((r) => r.capacity_kw != null);
+        return (
+          <>
+            {legacyRows.length > 0 && (
+              <div className="card mb-6">
+                <TableCardHeader
+                  title="Monthly Data Table — Legacy Billing (through Sep 2025)"
+                  subtitle="Single Capacity Fee, no PALECO/NPC split."
+                  columns={DPI_LEGACY_COLUMNS}
+                  rows={legacyRows}
+                  filename="dpi-legacy-billing"
+                />
+                <div className="overflow-x-auto rounded-lg border border-sky/30 mt-3">
+                  <table className="w-full text-xs" style={{ minWidth:"700px" }}>
+                    <thead>
+                      <tr className="bg-sky/30 border-b border-sky/40">
+                        {["Month","TCGR (₱/kWh)","Energy Offtake","Capacity Fee (₱)","Variable O&M Fee","Fuel Fee","PALECO Bill"].map((h) => (
+                          <th key={h} className="text-left py-2.5 px-3 text-dark/70 font-semibold whitespace-nowrap">{h}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        {contracts.length > 0 && (
-          <p className="text-xs text-dark/30 mt-3">
-            Rows marked with multiple contracts are clickable — expand to see contract period breakdown.
-          </p>
-        )}
-      </div>
+                    </thead>
+                    <tbody>
+                      {legacyRows.map((r, i) => (
+                        <tr key={i} className={`border-b border-sky/20 hover:bg-sky/10 transition-colors ${i % 2 === 0 ? "bg-white" : "bg-sky/5"}`}>
+                          <td className="py-2.5 px-3 font-semibold text-dark whitespace-nowrap">
+                            {r.month}
+                            {r.billing_period && (
+                              <div className="text-dark/30 font-normal text-[10px] mt-0.5">{r.billing_period}</div>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-primary whitespace-nowrap">₱{(toNum(r.tcgr) || 0).toFixed(4)}</td>
+                          <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fKWh(r.energy_offtake)}</td>
+                          <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fPHP(r.capacity_fee)}</td>
+                          <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fPHP(r.variable_om_fee)}</td>
+                          <td className="py-2.5 px-3 font-mono text-accentRed whitespace-nowrap">{fPHP(r.fuel_fee)}</td>
+                          <td className="py-2.5 px-3 font-mono font-bold text-dark whitespace-nowrap">{fPHP(r.paleco_bill)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {currentRows.length > 0 && (
+              <div className="card">
+                <TableCardHeader
+                  title="Monthly Data Table — Current Billing (from Oct 4, 2025)"
+                  subtitle="Capacity (kW) + Capital Recovery Fee, Fixed O&M, PALECO/NPC split, and PPD."
+                  columns={DPI_CURRENT_COLUMNS}
+                  rows={currentRows}
+                  filename="dpi-current-billing"
+                />
+                <div className="overflow-x-auto rounded-lg border border-sky/30 mt-3">
+                  <table className="w-full text-xs" style={{ minWidth:"1050px" }}>
+                    <thead>
+                      <tr className="bg-sky/30 border-b border-sky/40">
+                        {["Month","TCGR (₱/kWh)","Energy Offtake","Capacity (kW)","Capital Recovery Fee","Fixed O&M","Variable O&M Fee","Fuel Fee","PALECO Bill","NPC Bill","PPD"].map((h) => (
+                          <th key={h} className="text-left py-2.5 px-3 text-dark/70 font-semibold whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {currentRows.map((r, i) => (
+                        <tr key={i} className={`border-b border-sky/20 hover:bg-sky/10 transition-colors ${i % 2 === 0 ? "bg-white" : "bg-sky/5"}`}>
+                          <td className="py-2.5 px-3 font-semibold text-dark whitespace-nowrap">
+                            {r.month}
+                            {r.billing_period && (
+                              <div className="text-dark/30 font-normal text-[10px] mt-0.5">{r.billing_period}</div>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-primary whitespace-nowrap">₱{(toNum(r.tcgr) || 0).toFixed(4)}</td>
+                          <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fKWh(r.energy_offtake)}</td>
+                          <td className="py-2.5 px-3 font-mono whitespace-nowrap">{Number(r.capacity_kw).toLocaleString("en-PH")} kW</td>
+                          <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fPHP(r.capital_recovery_fee)}</td>
+                          <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fPHP(r.fixed_om_fee)}</td>
+                          <td className="py-2.5 px-3 font-mono whitespace-nowrap">{fPHP(r.variable_om_fee)}</td>
+                          <td className="py-2.5 px-3 font-mono text-accentRed whitespace-nowrap">{fPHP(r.fuel_fee)}</td>
+                          <td className="py-2.5 px-3 font-mono font-bold text-dark whitespace-nowrap">{fPHP(r.paleco_bill)}</td>
+                          <td className="py-2.5 px-3 font-mono text-accentBlue whitespace-nowrap">{fPHP(r.npc_bill)}</td>
+                          <td className="py-2.5 px-3 font-mono text-accentRed whitespace-nowrap">{fPHP(r.ppd)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
     </>
   );
 }
@@ -400,8 +480,8 @@ function InpcDashboard({ data }) {
         </ChartCard>
       </div>
       <div className="card">
-        <h3 className="font-semibold text-dark text-sm mb-4">Monthly Data Table</h3>
-        <div className="overflow-x-auto rounded-lg border border-sky/30">
+        <TableCardHeader title="Monthly Data Table" columns={INPC_COLUMNS} rows={data} filename="inpc-monthly-data"/>
+        <div className="overflow-x-auto rounded-lg border border-sky/30 mt-3">
           <table className="w-full text-xs" style={{ minWidth:"1000px" }}>
             <thead>
               <tr className="bg-sky/30 border-b border-sky/40">
@@ -528,8 +608,13 @@ function CipcDashboard({ data, dashboardKey }) {
         </ChartCard>
       </div>
       <div className="card">
-        <h3 className="font-semibold text-dark text-sm mb-4">Monthly Data Table</h3>
-        <div className="overflow-x-auto rounded-lg border border-sky/30">
+        <TableCardHeader
+          title="Monthly Data Table"
+          columns={isEpsa ? CIPC_EPSA_COLUMNS : CIPC_FULL_COLUMNS}
+          rows={data}
+          filename={`${slug}-monthly-data`}
+        />
+        <div className="overflow-x-auto rounded-lg border border-sky/30 mt-3">
           <table className="w-full text-xs" style={{ minWidth: isEpsa ? "700px" : "1100px" }}>
             <thead>
               <tr className="bg-sky/30 border-b border-sky/40">
@@ -591,8 +676,9 @@ function getYearFromMonth(month) {
 /* ================================================================ */
 /*  Filter Bar                                                       */
 /* ================================================================ */
-function FilterBar({ years, selectedYear, onYearChange, selectedMonths, onToggleMonth, onSelectAll, onClearAll }) {
-  const allSelected = selectedMonths.length === ALL_MONTHS.length;
+function FilterBar({ years, selectedYear, onYearChange, selectedMonths, onToggleMonth, onSelectAll, onClearAll, availableMonths }) {
+  const availableList = ALL_MONTHS.filter((m) => availableMonths.has(m));
+  const allSelected = availableList.length > 0 && availableList.every((m) => selectedMonths.includes(m));
   return (
     <div className="mb-6 bg-white rounded-2xl border border-sky/20 shadow-sm px-5 py-4">
 
@@ -632,13 +718,18 @@ function FilterBar({ years, selectedYear, onYearChange, selectedMonths, onToggle
         {/* Month pills */}
         <div className="flex flex-wrap gap-1.5 flex-1">
           {ALL_MONTHS.map((m) => {
-            const active = selectedMonths.includes(m);
+            const isAvailable = availableMonths.has(m);
+            const active = isAvailable && selectedMonths.includes(m);
             return (
               <button
                 key={m}
-                onClick={() => onToggleMonth(m)}
+                disabled={!isAvailable}
+                onClick={() => isAvailable && onToggleMonth(m)}
+                title={!isAvailable ? "No data uploaded for this month" : undefined}
                 className={`w-11 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
-                  active
+                  !isAvailable
+                    ? "bg-sky/5 border-sky/10 text-dark/15 cursor-not-allowed"
+                    : active
                     ? "bg-moss text-white border-moss shadow-sm"
                     : "bg-white border-sky/30 text-dark/40 hover:border-moss/40 hover:text-moss/70 hover:bg-sky/10"
                 }`}
@@ -680,6 +771,16 @@ export default function DashboardPage({ dashboardKey, user }) {
 
   const effectiveYear = selectedYear ?? latestYear;
 
+  // ── Months that actually have data for the selected year ──
+  const availableMonths = useMemo(() => {
+    return new Set(
+      rawData
+        .filter((r) => getYearFromMonth(r.month) === effectiveYear)
+        .map((r) => r.month?.trim().split(" ")[0])
+        .filter(Boolean)
+    );
+  }, [rawData, effectiveYear]);
+
   const handleToggleMonth = (m) => {
     setSelectedMonths((prev) =>
       prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]
@@ -720,8 +821,9 @@ export default function DashboardPage({ dashboardKey, user }) {
             selectedYear={effectiveYear}
             onYearChange={(y) => setSelectedYear(y)}
             selectedMonths={selectedMonths}
+            availableMonths={availableMonths}
             onToggleMonth={handleToggleMonth}
-            onSelectAll={() => setSelectedMonths([...ALL_MONTHS])}
+            onSelectAll={() => setSelectedMonths(ALL_MONTHS.filter((m) => availableMonths.has(m)))}
             onClearAll={() => setSelectedMonths([])}
           />
           {data.length === 0 ? (
@@ -730,7 +832,7 @@ export default function DashboardPage({ dashboardKey, user }) {
               <p className="text-dark/40 text-sm">Try adjusting the year or month range.</p>
             </div>
           ) : isDpi ? (
-            <DpiDashboard data={data} contracts={dpiResult.contracts}/>
+            <DpiDashboard data={data}/>
           ) : dashboardKey === "inpc" ? (
             <InpcDashboard data={data}/>
           ) : (
